@@ -10,3 +10,9 @@ mongodb_data/
 # Build files
 .next/
 dist/
+reconcile_db_plants_and_balance.js
+test_dispatch_rejection_rules.js
+test_edit_plant_return.js
+test_minimal_values_and_finished_scrap_return.js
+test_plant_returns_and_scrap_reconciliation.js
+test_traceability_reflection.js
