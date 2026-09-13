@@ -1,0 +1,34 @@
+import express from "express";
+import { findAllPlantUnits, createPlantUnit } from "../model/plantUnitModel.js";
+import { verifyAuth } from "../middleware/authMiddleware.js";
+import { authorizeRoles } from "../middleware/roleMiddleware.js";
+
+const router = express.Router();
+
+router.get("/", verifyAuth, async (req, res, next) => {
+  try {
+    const onlyActive = req.query.all !== "true";
+    const plants = await findAllPlantUnits(onlyActive);
+    res.json({
+      success: true,
+      data: plants
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/", verifyAuth, authorizeRoles("ADMIN"), async (req, res, next) => {
+  try {
+    const plant = await createPlantUnit(req.body);
+    res.status(201).json({
+      success: true,
+      message: `Plant unit '${plant.name}' (${plant.code}) created successfully.`,
+      data: plant
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
