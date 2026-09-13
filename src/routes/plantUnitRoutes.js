@@ -1,4 +1,5 @@
 import express from "express";
+import { AUTHORIZED_PLANTS } from "../config/plants.js";
 import { findAllPlantUnits, createPlantUnit } from "../model/plantUnitModel.js";
 import { verifyAuth } from "../middleware/authMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -7,11 +8,10 @@ const router = express.Router();
 
 router.get("/", verifyAuth, async (req, res, next) => {
   try {
-    const onlyActive = req.query.all !== "true";
-    const plants = await findAllPlantUnits(onlyActive);
+    // Deliver strictly the 7 authorized operational plants
     res.json({
       success: true,
-      data: plants
+      data: AUTHORIZED_PLANTS
     });
   } catch (error) {
     next(error);

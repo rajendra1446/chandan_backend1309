@@ -134,10 +134,28 @@ export const recordFinishedProduct = async (productData, userId) => {
     );
   }
 
+  const scrapWeight = Number(productData.scrap_weight_mt) || 0;
+  const returnedWeight = Number(productData.returned_weight_mt) || 0;
+
+  if (scrapWeight < 0) {
+    throw new Error("Scrap weight cannot be negative.");
+  }
+  if (returnedWeight < 0) {
+    throw new Error("Returned weight cannot be negative.");
+  }
+
+  if (finishedWeight + scrapWeight > inputWeight + 0.005) {
+    throw new Error(
+      `Finished prime output (${finishedWeight} MT) + scrap (${scrapWeight} MT) cannot exceed input billet consumption (${inputWeight} MT).`
+    );
+  }
+
   const { BilletPlantDispatch } = await import("./dispatchModel.js");
   const validDispatchId = productData.dispatch_id && mongoose.isValidObjectId(productData.dispatch_id)
     ? productData.dispatch_id
     : null;
+
+  const { BilletRejection } = await import("./rejectionModel.js");
 
   if (validDispatchId) {
     const dispatch = await BilletPlantDispatch.findById(validDispatchId);
@@ -146,11 +164,19 @@ export const recordFinishedProduct = async (productData, userId) => {
     }
     const previousProducts = await FinishedProduct.find({ dispatch_id: validDispatchId });
     const usedInputWeight = previousProducts.reduce((sum, p) => sum + (Number(p.input_billet_weight_mt) || 0), 0);
-    const remainingDispatchMaterial = Number(Math.max(0, dispatch.dispatched_weight_mt - usedInputWeight).toFixed(3));
+    const existingRejections = await BilletRejection.find({ dispatch_id: validDispatchId });
+    const rejectedWeight = existingRejections.reduce((sum, r) => sum + (Number(r.rejected_weight_mt) || 0), 0);
+    const { PlantReturn } = await import("./plantReturnModel.js");
+    const existingReturns = await PlantReturn.find({ dispatch_id: validDispatchId });
+    const existingReturnWeight = existingReturns.reduce((sum, r) => sum + (Number(r.returned_weight_mt) || 0), 0);
 
-    if (inputWeight > remainingDispatchMaterial + 0.005) {
+    const remainingDispatchMaterial = Number(
+      Math.max(0, dispatch.dispatched_weight_mt - usedInputWeight - rejectedWeight - existingReturnWeight).toFixed(3)
+    );
+
+    if (inputWeight + returnedWeight > remainingDispatchMaterial + 0.005) {
       throw new Error(
-        `Input billet weight (${inputWeight} MT) exceeds remaining unconsumed material (${remainingDispatchMaterial} MT) for dispatch #${dispatch.dispatch_number}.`
+        `Material drawn from dispatch (Input: ${inputWeight} MT + Return: ${returnedWeight} MT) exceeds remaining unconsumed material (${remainingDispatchMaterial} MT) for dispatch #${dispatch.dispatch_number} (Dispatched: ${dispatch.dispatched_weight_mt} MT, Prior Products: ${usedInputWeight} MT, Rejections: ${rejectedWeight} MT, Prior Returns: ${existingReturnWeight} MT).`
       );
     }
   } else {
@@ -164,11 +190,23 @@ export const recordFinishedProduct = async (productData, userId) => {
     }
     const previousProducts = await FinishedProduct.find({ heat_number: heat.heat_number });
     const usedInputWeight = previousProducts.reduce((sum, p) => sum + (Number(p.input_billet_weight_mt) || 0), 0);
-    const availableMaterial = Number(Math.max(0, totalDispatched - usedInputWeight).toFixed(3));
+    const existingRejections = await BilletRejection.find({
+      heat_number: heat.heat_number,
+      stage: { $in: ["ROLLING_MILL", "FINISHING"] }
+    });
+    const rejectedWeight = existingRejections.reduce((sum, r) => sum + (Number(r.rejected_weight_mt) || 0), 0);
 
-    if (inputWeight > availableMaterial + 0.005) {
+    const { PlantReturn } = await import("./plantReturnModel.js");
+    const existingReturns = await PlantReturn.find({ heat_number: heat.heat_number });
+    const existingReturnWeight = existingReturns.reduce((sum, r) => sum + (Number(r.returned_weight_mt) || 0), 0);
+
+    const availableMaterial = Number(
+      Math.max(0, totalDispatched - usedInputWeight - rejectedWeight - existingReturnWeight).toFixed(3)
+    );
+
+    if (inputWeight + returnedWeight > availableMaterial + 0.005) {
       throw new Error(
-        `Input billet weight (${inputWeight} MT) exceeds available dispatched material (${availableMaterial} MT) for heat '${heat.heat_number}'.`
+        `Material drawn (Input: ${inputWeight} MT + Return: ${returnedWeight} MT) exceeds available dispatched material (${availableMaterial} MT) for heat '${heat.heat_number}'. (Dispatched: ${totalDispatched} MT, Products: ${usedInputWeight} MT, Scrap: ${rejectedWeight} MT, Returns: ${existingReturnWeight} MT).`
       );
     }
   }
@@ -196,7 +234,65 @@ export const recordFinishedProduct = async (productData, userId) => {
     remarks: productData.remarks || null
   });
 
-  return await findFinishedProductById(doc._id);
+  // Auto-record scrap rejection if specified
+  let createdRejection = null;
+  if (scrapWeight > 0) {
+    const { BilletRejection } = await import("./rejectionModel.js");
+    createdRejection = await BilletRejection.create({
+      heat_id: heat._id,
+      heat_number: heat.heat_number,
+      dispatch_id: validDispatchId,
+      production_id: doc._id,
+      stage: "ROLLING_MILL",
+      rejection_type: productData.scrap_rejection_type || "END_CROP_SCRAP",
+      rejected_pieces: Number(productData.scrap_pieces) || 0,
+      rejected_weight_mt: scrapWeight,
+      disposition: "SCRAP_REMELT",
+      rejection_reason: productData.scrap_reason || `End crop & cobble scrap generated during rolling of ${doc.finished_product_name}`,
+      reported_by_id: validUserId,
+      remarks: `Auto-linked from Finished Product Batch #${doc.production_batch_number}`
+    });
+  }
+
+  // Auto-record return material if specified
+  let createdReturn = null;
+  if (returnedWeight > 0) {
+    const { PlantReturn } = await import("./plantReturnModel.js");
+    const voucherNo = `RET-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`;
+    const retPcs = Number(productData.returned_pieces) || 1;
+    const retTo = productData.returned_to || "Billet Yard Stock";
+
+    createdReturn = await PlantReturn.create({
+      return_voucher_no: voucherNo,
+      heat_id: heat._id,
+      heat_number: heat.heat_number,
+      dispatch_id: validDispatchId,
+      returned_from: productData.mill_name || "Rolling Mill",
+      returned_to: retTo,
+      return_type: "UNUSED_BILLET_RETURN",
+      returned_pieces: retPcs,
+      returned_weight_mt: returnedWeight,
+      return_reason: productData.return_reason || `Unused billet material returned from production batch #${doc.production_batch_number}`,
+      stock_restored: true,
+      authorized_by_id: validUserId,
+      received_by_id: validUserId,
+      remarks: `Auto-linked from Finished Product Batch #${doc.production_batch_number}`
+    });
+
+    // If restored to yard stock, restore available pieces & weight
+    if (retTo.toLowerCase().includes("stock") || retTo.toLowerCase().includes("yard")) {
+      heat.available_pieces = Math.min(heat.total_pieces, heat.available_pieces + retPcs);
+      heat.available_weight_mt = Number(Math.min(heat.total_weight_mt, heat.available_weight_mt + returnedWeight).toFixed(3));
+      await heat.save();
+    }
+  }
+
+  const result = await findFinishedProductById(doc._id);
+  if (result) {
+    result.created_rejection = createdRejection ? createdRejection.toJSON() : null;
+    result.created_return = createdReturn ? createdReturn.toJSON() : null;
+  }
+  return result;
 };
 
 export const findAllFinishedProducts = async ({ heat_number, product_name, search, limit = 50, offset = 0 }) => {

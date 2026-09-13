@@ -101,7 +101,7 @@ export const recordRejection = async (data, userId) => {
   }
 
   const validUserId = userId && mongoose.isValidObjectId(userId) ? userId : null;
-  const validDispatchId = data.dispatch_id && mongoose.isValidObjectId(data.dispatch_id) ? data.dispatch_id : null;
+  let validDispatchId = data.dispatch_id && mongoose.isValidObjectId(data.dispatch_id) ? data.dispatch_id : null;
   const validProductionId = data.production_id && mongoose.isValidObjectId(data.production_id) ? data.production_id : null;
 
   const rejectedPieces = Number(data.rejected_pieces) || 0;
@@ -121,34 +121,122 @@ export const recordRejection = async (data, userId) => {
     if (!production) {
       throw new Error(`Referenced production batch #${validProductionId} not found.`);
     }
-    if (rejectedWeightMt > production.input_billet_weight_mt + 0.001) {
-      throw new Error(
-        `Rejection weight (${rejectedWeightMt} MT) cannot exceed production batch input material (${production.input_billet_weight_mt} MT).`
-      );
+    // Auto-link dispatch if not explicitly provided
+    if (!validDispatchId && production.dispatch_id) {
+      validDispatchId = production.dispatch_id;
     }
-    if (rejectedPieces > 0 && production.finished_pieces > 0 && rejectedPieces > production.finished_pieces) {
+    if (production.heat_number && production.heat_number !== heatNumber) {
+      throw new Error(`Referenced production batch belongs to heat '${production.heat_number}', not '${heatNumber}'.`);
+    }
+    // For finishing stage defect checks against finished products
+    if (data.stage === "FINISHING" && rejectedPieces > 0 && production.finished_pieces > 0 && rejectedPieces > production.finished_pieces) {
       throw new Error(
         `Rejected pieces (${rejectedPieces} pcs) cannot exceed produced batch pieces (${production.finished_pieces} pcs).`
       );
     }
   }
 
-  // If dispatch_id is provided, validate against that dispatch
+  // If dispatch_id is provided, validate against that dispatch and finished product usage
   if (validDispatchId) {
     const { BilletPlantDispatch } = await import("./dispatchModel.js");
+    const { FinishedProduct } = await import("./finishedProductModel.js");
     const dispatch = await BilletPlantDispatch.findById(validDispatchId);
     if (!dispatch) {
       throw new Error(`Referenced dispatch #${validDispatchId} not found.`);
     }
-    if (rejectedWeightMt > dispatch.dispatched_weight_mt + 0.001) {
+
+    // Calculate finished products already built from this dispatch material
+    const finishedProducts = await FinishedProduct.find({ dispatch_id: validDispatchId });
+    const totalFinishedInputWeight = finishedProducts.reduce(
+      (sum, p) => sum + (Number(p.input_billet_weight_mt) || 0),
+      0
+    );
+
+    const { PlantReturn } = await import("./plantReturnModel.js");
+    const existingReturns = await PlantReturn.find({ dispatch_id: validDispatchId });
+    const alreadyReturnedWeight = existingReturns.reduce(
+      (sum, ret) => sum + (Number(ret.returned_weight_mt) || 0),
+      0
+    );
+
+    // Rule: If finished products and returns have already accounted for the full dispatch material, rejection is IMPOSSIBLE
+    if (totalFinishedInputWeight + alreadyReturnedWeight >= dispatch.dispatched_weight_mt - 0.001) {
       throw new Error(
-        `Rejection weight (${rejectedWeightMt} MT) cannot exceed dispatched material (${dispatch.dispatched_weight_mt} MT).`
+        `Impossible to add rejection: All dispatched material (${dispatch.dispatched_weight_mt} MT) has already been consumed by finished products (${totalFinishedInputWeight} MT) or returned to yard stock (${alreadyReturnedWeight} MT). Rejection is only possible if unconsumed material remains at the plant.`
       );
     }
+
+    // If finished product built is less than dispatch material, rejection is possible up to the remaining unconsumed balance
+    const existingRejections = await BilletRejection.find({ dispatch_id: validDispatchId });
+    const alreadyRejectedWeight = existingRejections.reduce(
+      (sum, r) => sum + (Number(r.rejected_weight_mt) || 0),
+      0
+    );
+    const remainingBalance = Number(
+      Math.max(
+        0,
+        dispatch.dispatched_weight_mt - totalFinishedInputWeight - alreadyRejectedWeight - alreadyReturnedWeight
+      ).toFixed(3)
+    );
+
+    if (remainingBalance <= 0) {
+      throw new Error(
+        `Impossible to add rejection: No unconsumed balance remains for dispatch #${dispatch.dispatch_number}. (Dispatched: ${dispatch.dispatched_weight_mt} MT, Finished Products: ${totalFinishedInputWeight} MT, Existing Rejections: ${alreadyRejectedWeight} MT, Prior Returns: ${alreadyReturnedWeight} MT).`
+      );
+    }
+
+    if (rejectedWeightMt > remainingBalance + 0.005) {
+      throw new Error(
+        `Rejection weight (${rejectedWeightMt} MT) exceeds remaining unconsumed dispatch balance (${remainingBalance} MT). Dispatched: ${dispatch.dispatched_weight_mt} MT, Finished products built: ${totalFinishedInputWeight} MT, Existing rejections: ${alreadyRejectedWeight} MT, Prior returns: ${alreadyReturnedWeight} MT.`
+      );
+    }
+
     if (rejectedPieces > 0 && rejectedPieces > dispatch.dispatched_pieces) {
       throw new Error(
         `Rejected pieces (${rejectedPieces} pcs) cannot exceed dispatched pieces (${dispatch.dispatched_pieces} pcs).`
       );
+    }
+  } else {
+    // If dispatch_id is not explicitly provided, check if heat has dispatches and finished products in plant stage
+    const { BilletPlantDispatch } = await import("./dispatchModel.js");
+    const { FinishedProduct } = await import("./finishedProductModel.js");
+    const { PlantReturn } = await import("./plantReturnModel.js");
+    const dispatches = await BilletPlantDispatch.find({ heat_number: heat.heat_number });
+    const totalDispatched = dispatches.reduce((sum, d) => sum + (Number(d.dispatched_weight_mt) || 0), 0);
+
+    if (totalDispatched > 0 && (data.stage === "ROLLING_MILL" || data.stage === "FINISHING")) {
+      const finishedProducts = await FinishedProduct.find({ heat_number: heat.heat_number });
+      const totalFinishedInput = finishedProducts.reduce(
+        (sum, p) => sum + (Number(p.input_billet_weight_mt) || 0),
+        0
+      );
+
+      const existingReturns = await PlantReturn.find({ heat_number: heat.heat_number });
+      const alreadyReturned = existingReturns.reduce((sum, r) => sum + (Number(r.returned_weight_mt) || 0), 0);
+
+      if (totalFinishedInput + alreadyReturned >= totalDispatched - 0.001) {
+        throw new Error(
+          `Impossible to add rejection: All dispatched material (${totalDispatched} MT) for heat '${heat.heat_number}' has already been consumed by finished products (${totalFinishedInput} MT) or returned to yard stock (${alreadyReturned} MT). Rejection is only possible if unconsumed material remains at the plant.`
+        );
+      }
+
+      const existingRejections = await BilletRejection.find({
+        heat_number: heat.heat_number,
+        stage: { $in: ["ROLLING_MILL", "FINISHING"] }
+      });
+      const alreadyRejected = existingRejections.reduce(
+        (sum, r) => sum + (Number(r.rejected_weight_mt) || 0),
+        0
+      );
+      const remainingHeatBalance = Number(
+        Math.max(0, totalDispatched - totalFinishedInput - alreadyRejected - alreadyReturned).toFixed(3)
+      );
+
+      if (rejectedWeightMt > remainingHeatBalance + 0.005) {
+        throw new Error(
+          `Rejection weight (${rejectedWeightMt} MT) exceeds available plant material balance (${remainingHeatBalance} MT) for heat '${heat.heat_number}'. Dispatched: ${totalDispatched} MT, Finished Products: ${totalFinishedInput} MT, Existing Rejections: ${alreadyRejected} MT, Prior Returns: ${alreadyReturned} MT.`
+        );
+      }
     }
   }
 
@@ -236,6 +324,19 @@ export const updateRejection = async (id, updateData) => {
   if (!id || !mongoose.isValidObjectId(id)) return null;
   const current = await BilletRejection.findById(id);
   if (!current) return null;
+
+  if (updateData.rejected_weight_mt !== undefined) {
+    const wt = Number(updateData.rejected_weight_mt);
+    if (isNaN(wt) || wt <= 0) {
+      throw new Error("Rejected scrap weight must be strictly greater than zero.");
+    }
+  }
+  if (updateData.rejected_pieces !== undefined) {
+    const pcs = Number(updateData.rejected_pieces);
+    if (isNaN(pcs) || pcs < 0) {
+      throw new Error("Rejected pieces cannot be negative.");
+    }
+  }
 
   const allowed = [
     "stage",

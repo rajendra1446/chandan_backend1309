@@ -254,6 +254,7 @@ export const findAllHeats = async ({ grade, status, search, limit = 50, offset =
     json.cu_percent = lab ? lab.cu_percent : null;
     json.surface_quality = lab ? lab.surface_quality : null;
     json.internal_soundness = lab ? lab.internal_soundness : null;
+    json.other_elements = lab ? (lab.other_elements || {}) : {};
     json.lab_remarks = lab ? lab.lab_remarks : null;
     json.chemical_analysis = lab
       ? {
@@ -266,6 +267,7 @@ export const findAllHeats = async ({ grade, status, search, limit = 50, offset =
           ni_percent: lab.ni_percent,
           mo_percent: lab.mo_percent,
           cu_percent: lab.cu_percent,
+          other_elements: lab.other_elements || {},
           surface_quality: lab.surface_quality,
           internal_soundness: lab.internal_soundness,
           verdict: lab.verdict,
@@ -312,11 +314,25 @@ export const findHeatById = async (id) => {
     result.lab_verdict = lab.verdict;
     result.test_certificate_no = lab.test_certificate_no;
     result.lab_tested_at = lab.tested_at;
+    result.c_percent = lab.c_percent;
+    result.mn_percent = lab.mn_percent;
+    result.si_percent = lab.si_percent;
+    result.s_percent = lab.s_percent;
+    result.p_percent = lab.p_percent;
+    result.cr_percent = lab.cr_percent;
+    result.ni_percent = lab.ni_percent;
+    result.mo_percent = lab.mo_percent;
+    result.cu_percent = lab.cu_percent;
+    result.other_elements = lab.other_elements || {};
+    result.surface_quality = lab.surface_quality;
+    result.internal_soundness = lab.internal_soundness;
+    result.lab_remarks = lab.lab_remarks;
   } else {
     result.lab_check_id = null;
     result.lab_verdict = null;
     result.test_certificate_no = null;
     result.lab_tested_at = null;
+    result.other_elements = {};
   }
 
   return result;

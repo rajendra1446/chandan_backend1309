@@ -108,34 +108,48 @@ export const schemas = {
     dispatched_pieces: { required: true, type: "number", min: 1 },
     dispatched_weight_mt: { required: true, type: "number", min: 0.001 }
   },
+  createDispatch: {
+    heat_number: { required: true, type: "string", minLength: 2 },
+    target_plant: { required: true, type: "string" },
+    dispatched_pieces: { required: true, type: "number", min: 1 },
+    dispatched_weight_mt: { required: true, type: "number", min: 0.00001 }
+  },
   updateDispatch: {
     target_plant: { type: "string" },
     dispatched_pieces: { type: "number", min: 1 },
-    dispatched_weight_mt: { type: "number", min: 0.001 }
+    dispatched_weight_mt: { type: "number", min: 0.00001 }
   },
   createFinishedProduct: {
     heat_number: { required: true, type: "string", minLength: 2 },
     finished_product_name: { required: true, type: "string", minLength: 2 },
     finished_size: { required: true, type: "string", minLength: 1 },
-    input_billet_weight_mt: { required: true, type: "number", min: 0.001 },
-    finished_weight_mt: { required: true, type: "number", min: 0.001 }
+    input_billet_weight_mt: { required: true, type: "number", min: 0.00001 },
+    finished_weight_mt: { required: true, type: "number", min: 0.00001 },
+    scrap_weight_mt: { type: "number", min: 0 },
+    returned_weight_mt: { type: "number", min: 0 },
+    scrap_pieces: { type: "number", min: 0 },
+    returned_pieces: { type: "number", min: 0 },
+    scrap_rejection_type: { type: "string" },
+    scrap_reason: { type: "string" },
+    returned_to: { type: "string" },
+    return_reason: { type: "string" }
   },
   updateFinishedProduct: {
     finished_product_name: { type: "string" },
     finished_size: { type: "string" },
-    finished_weight_mt: { type: "number", min: 0.001 }
+    finished_weight_mt: { type: "number", min: 0.00001 }
   },
   createRejection: {
     heat_number: { required: true, type: "string", minLength: 2 },
     stage: { required: true, type: "string" },
     rejection_type: { required: true, type: "string" },
-    rejected_weight_mt: { required: true, type: "number", min: 0.001 },
+    rejected_weight_mt: { required: true, type: "number", min: 0.00001 },
     rejection_reason: { required: true, type: "string", minLength: 3 }
   },
   updateRejection: {
     stage: { type: "string" },
     rejection_type: { type: "string" },
-    rejected_weight_mt: { type: "number", min: 0.001 },
+    rejected_weight_mt: { type: "number", min: 0.00001 },
     rejection_reason: { type: "string", minLength: 3 }
   },
   createReturn: {
@@ -144,12 +158,18 @@ export const schemas = {
     returned_to: { required: true, type: "string" },
     return_type: { required: true, type: "string" },
     returned_pieces: { required: true, type: "number", min: 1 },
-    returned_weight_mt: { required: true, type: "number", min: 0.001 },
+    returned_weight_mt: { required: true, type: "number", min: 0.00001 },
     return_reason: { required: true, type: "string", minLength: 3 }
   },
   updateReturn: {
+    returned_from: { type: "string" },
+    source_plant: { type: "string" },
+    returned_to: { type: "string" },
+    destination_plant: { type: "string" },
+    return_type: { type: "string" },
     returned_pieces: { type: "number", min: 1 },
-    returned_weight_mt: { type: "number", min: 0.001 },
-    return_reason: { type: "string", minLength: 3 }
+    returned_weight_mt: { type: "number", min: 0.00001 },
+    return_reason: { type: "string", minLength: 2 },
+    remarks: { type: "string" }
   }
 };
