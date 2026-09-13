@@ -5,6 +5,7 @@
 
 # Node modules
 node_modules/
+mongodb_data/
 
 # Build files
 .next/
